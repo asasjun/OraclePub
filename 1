@@ -1,0 +1,306 @@
+1、查看自动收集统计信息对应的task(也就是program的名称)及状态
+        --当前状态
+        SQL> select * from v$version where rownum<2;
+
+        BANNER
+        --------------------------------------------------------------------------------
+        Oracle Database 11g Enterprise Edition Release 11.2.0.3.0 - 64bit Production
+
+        --如下查询表明统计信息的收集是位于gather_stats_prog这个task，当前状态为enabled，即启用
+        SELECT client_name,task_name, status
+        FROM dba_autotask_task
+        WHERE client_name = 'auto optimizer stats collection';
+
+        CLIENT_NAME                         TASK_NAME              STATUS
+        ----------------------------------- ---------------------- --------
+        auto optimizer stats collection     gather_stats_prog      ENABLED
+
+        --下面查询dba_scheduler_programs
+        --在scheduler_programs中，程序GATHER_STATS_PROG调用
+        --dbms_stats.gather_database_stats_job_proc来实现统计信息的自动收集，如下查询
+        SQL> SELECT program_action, number_of_arguments, enabled
+          2  FROM dba_scheduler_programs
+          3  WHERE owner = 'SYS'
+          4  AND program_name = 'GATHER_STATS_PROG';
+
+        PROGRAM_ACTION                             NUMBER_OF_ARGUMENTS ENABL
+        ------------------------------------------ ------------------- -----
+        dbms_stats.gather_database_stats_job_proc                    0 TRUE
+
+2、查看自动收集统计信息是否开启
+        SELECT CLIENT_NAME,
+               STATUS
+        FROM   DBA_AUTOTASK_CLIENT
+        WHERE  CLIENT_NAME = 'auto optimizer stats collection';
+
+        CLIENT_NAME                         STATUS
+        ----------------------------------- --------
+        auto optimizer stats collection     ENABLED
+
+3、统计信息收集的窗口组，如下查询
+        SQL> SELECT window_group
+          2  FROM dba_autotask_client
+          3  WHERE client_name = 'auto optimizer stats collection';
+
+        WINDOW_GROUP
+        ----------------------------------------------------------------
+        ORA$AT_WGRP_OS
+
+4、查询统计信息收集的具体窗口
+        --统计信息收集的时间窗口
+        --如下查询周一至周五时间为22点，周六日为6点
+        --此外持续也不相同，周一至周五为4小时，周六日为20个小时
+        --enabled为true表明当前的这些作业处于激活状态
+        SELECT w.window_name,
+               w.repeat_interval,
+               w.duration,
+               w.enabled
+          FROM dba_autotask_window_clients c, dba_scheduler_windows w
+         WHERE c.window_name = w.window_name AND c.optimizer_stats = 'ENABLED';
+
+        WINDOW_NAME               REPEAT_INTERVAL                DURATION                  ENABL
+        ------------------------- ------------------------------ ------------------------- -----
+        MONDAY_WINDOW             freq=daily;byday=MON;byhour=22 +000 04:00:00             TRUE
+                                  ;byminute=0; bysecond=0
+
+        TUESDAY_WINDOW            freq=daily;byday=TUE;byhour=22 +000 04:00:00             TRUE
+                                  ;byminute=0; bysecond=0
+
+        WEDNESDAY_WINDOW          freq=daily;byday=WED;byhour=22 +000 04:00:00             TRUE
+                                  ;byminute=0; bysecond=0
+
+        THURSDAY_WINDOW           freq=daily;byday=THU;byhour=22 +000 04:00:00             TRUE
+                                  ;byminute=0; bysecond=0
+
+        FRIDAY_WINDOW             freq=daily;byday=FRI;byhour=22 +000 04:00:00             TRUE
+                                  ;byminute=0; bysecond=0
+
+        SATURDAY_WINDOW           freq=daily;byday=SAT;byhour=6; +000 20:00:00             TRUE
+                                  byminute=0; bysecond=0
+
+        SUNDAY_WINDOW             freq=daily;byday=SUN;byhour=6; +000 20:00:00             TRUE
+                          byminute=0; bysecond=0
+
+4、查看自动收集统计信息历史执行情况
+        SELECT *                              --Author : Leshami
+          FROM dba_autotask_client_history    --Blog   : http://blog.csdn.net/leshami
+         WHERE client_name LIKE '%stats%';123456789101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687
+
+
+
+二、统计信息收集调度时间禁用及修改
+
+
+
+1、启用自动收集统计信息
+        BEGIN
+           DBMS_AUTO_TASK_ADMIN.ENABLE (
+              client_name   => 'auto optimizer stats collection',
+              operation     => NULL,
+              window_name   => NULL);
+        END;
+
+2、禁用自动收集统计信息
+        BEGIN
+           DBMS_AUTO_TASK_ADMIN.DISABLE (
+              client_name   => 'auto optimizer stats collection',
+              operation     => NULL,
+              window_name   => NULL);
+        END;
+
+        --执行上面的代码后，验证是否被禁用
+        SELECT CLIENT_NAME,
+               STATUS
+        FROM   DBA_AUTOTASK_CLIENT
+        WHERE  CLIENT_NAME = 'auto optimizer stats collection';
+
+        CLIENT_NAME                         STATUS
+        ----------------------------------- --------
+        auto optimizer stats collection     DISABLED
+
+3、关闭单个调度时间窗口
+        BEGIN
+           DBMS_AUTO_TASK_ADMIN.disable (
+              client_name   => 'auto optimizer stats collection',
+              operation     => NULL,
+              window_name   => 'MONDAY_WINDOW');
+        END;
+        /
+
+        --验证关闭情况，如下，optimizer_stats列为DISABLED
+        SQL>   SELECT window_name,
+          2           window_next_time,
+          3           window_active,
+          4           optimizer_stats
+          5      FROM dba_autotask_window_clients
+          6     WHERE window_name = 'MONDAY_WINDOW'
+          7  ORDER BY window_next_time;
+
+        WINDOW_NAME               WINDOW_NEXT_TIME                     WINDO OPTIMIZE
+        ------------------------- ------------------------------------ ----- --------
+        MONDAY_WINDOW             27-MAR-17 10.00.00.000000 PM PRC     FALSE DISABLED
+
+4、关闭所有时间调度窗口，验证略
+        BEGIN
+           DBMS_AUTO_TASK_ADMIN.disable (
+              client_name   => 'auto optimizer stats collection',
+              operation     => NULL,
+              window_name   => NULL);
+        END;
+        /
+
+5、开启单个调度时间窗口及所有时间调度窗口，只需要使用enable过程
+        -- 注：单个应指定窗口名字，如window_name   => 'MONDAY_WINDOW'
+        BEGIN
+           DBMS_AUTO_TASK_ADMIN.enable (
+              client_name   => 'auto optimizer stats collection',
+              operation     => NULL,
+              window_name   => NULL);
+        END;
+        /
+
+6、修改时间窗口到特定的时间
+        --如下示例，将周五时间窗口时间到晚间23点30分
+        BEGIN
+           DBMS_SCHEDULER.DISABLE (name => '"SYS"."FRIDAY_WINDOW"', force => TRUE);
+        END;
+
+        BEGIN
+           DBMS_SCHEDULER.SET_ATTRIBUTE (
+              name        => '"SYS"."FRIDAY_WINDOW"',
+              attribute   => 'REPEAT_INTERVAL',
+              VALUE       => 'FREQ=WEEKLY;BYDAY=FRI;BYHOUR=23;BYMINUTE=30;BYSECOND=0');
+        END;
+
+        BEGIN
+           DBMS_SCHEDULER.ENABLE (name => '"SYS"."FRIDAY_WINDOW"');
+        END;
+
+        --验证修改
+        SELECT w.window_name,
+               w.repeat_interval,
+               w.duration,
+               w.enabled
+        FROM   dba_autotask_window_clients c, dba_scheduler_windows w
+        WHERE      c.window_name = w.window_name
+               AND c.optimizer_stats = 'ENABLED'
+               AND c.window_name = 'FRIDAY_WINDOW';
+
+
+        WINDOW_NAME     REPEAT_INTERVAL                                              DURATION      ENABL
+        --------------- ------------------------------------------------------------ ------------  --------
+        FRIDAY_WINDOW   FREQ=WEEKLY;BYDAY=FRI;BYHOUR=23;BYMINUTE=30;BYSECOND=0       +000 04:00:0  TRUE
+
+7、新增维护时间窗口
+        -- 假定我们要处理的是修改周一的时间窗口
+        -- 首先关闭周一的时间窗口
+        BEGIN
+           DBMS_AUTO_TASK_ADMIN.disable (
+              client_name   => 'auto optimizer stats collection',
+              operation     => NULL,
+              window_name   => 'MONDAY_WINDOW');
+        END;
+        /
+
+        --接下来创建一个窗口并设定时间调度间隔
+        --如下，每周一5点执行，持续时间为1小时
+        BEGIN
+           DBMS_SCHEDULER.create_window (
+              window_name       => 'STATS_WINDOW',
+              resource_plan     => 'DEFAULT_MAINTENANCE_PLAN',
+              repeat_interval   => 'freq=daily;byday=MON;byhour=5;byminute=0; bysecond=0',
+              duration          => INTERVAL '1' HOUR,
+              comments          => 'Test window for stats task');
+        EXCEPTION
+           WHEN OTHERS
+           THEN
+              IF SQLCODE = -27477
+              THEN
+                 NULL;
+              ELSE
+                 RAISE;
+              END IF;
+        END;
+
+        BEGIN
+           DBMS_SCHEDULER.set_attribute ('STATS_WINDOW', 'SYSTEM', TRUE);
+           DBMS_SCHEDULER.set_attribute ('STATS_WINDOW',
+                                         'FOLLOW_DEFAULT_TIMEZONE',
+                                         TRUE);
+        EXCEPTION
+           WHEN OTHERS
+           THEN
+              IF SQLCODE = -27477
+              THEN
+                 NULL;
+              ELSE
+                 RAISE;
+              END IF;
+        END;
+        /
+
+        SQL> SELECT window_name, repeat_interval, enabled
+          2  FROM   dba_scheduler_windows
+          3  WHERE  window_name = 'STATS_WINDOW';
+
+        WINDOW_NAME                    REPEAT_INTERVAL                                              ENABL
+        ------------------------------ ------------------------------------------------------------ -----
+        STATS_WINDOW                   freq=daily;byday=MON;byhour=5;byminute=0; bysecond=0         TRUE
+
+        --接下来将窗口STATS_WINDOW添加到维护窗口组
+
+        BEGIN
+           DBMS_SCHEDULER.add_window_group_member ('MAINTENANCE_WINDOW_GROUP',
+                                                   'STATS_WINDOW');
+        END;
+        /
+
+        SQL> SELECT WINDOW_NAME,
+          2         WINDOW_NEXT_TIME,
+          3         WINDOW_ACTIVE,
+          4         OPTIMIZER_STATS
+          5  FROM   DBA_AUTOTASK_WINDOW_CLIENTS
+          6  WHERE  WINDOW_NAME in ('STATS_WINDOW','MONDAY_WINDOW') 
+          7  ORDER BY WINDOW_NEXT_TIME;
+
+        WINDOW_NAME                    WINDOW_NEXT_TIME                       WINDO OPTIMIZE
+        ------------------------------ -------------------------------------- ----- --------
+        STATS_WINDOW                   27-MAR-17 05.00.00.000000 AM PRC       FALSE ENABLED   --允许
+        MONDAY_WINDOW                  27-MAR-17 10.00.00.000000 PM PRC       FALSE DISABLED  --当前被disabled123456789101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899100101102103104105106107108109110111112113114115116117118119120121122123124125126127128129130131132133134135136137138139140141142143144145146147148149150151152153154155156157158159160161162163164165166167168169170171172173174175
+
+
+
+三、手工执行统计信息的自动收集
+
+
+
+SQL> create table scott.tb_objs as select * from dba_objects;
+
+        SQL> select TABLE_NAME,NUM_ROWS,BLOCKS,LAST_ANALYZED from dba_tables where TABLE_NAME='TB_OBJS';
+
+        TABLE_NAME                       NUM_ROWS     BLOCKS LAST_ANAL
+        ------------------------------ ---------- ---------- ---------
+        TB_OBJS
+
+        --执行下面的这个存储过程
+        SQL> EXEC DBMS_AUTO_TASK_IMMEDIATE.GATHER_OPTIMIZER_STATS;
+
+        PL/SQL procedure successfully completed.
+
+        --如下查询，scott表上的统计信息已更新
+        SQL> select TABLE_NAME,NUM_ROWS,BLOCKS,LAST_ANALYZED from dba_tables where TABLE_NAME='TB_OBJS';
+
+        TABLE_NAME                       NUM_ROWS     BLOCKS LAST_ANAL
+        ------------------------------ ---------- ---------- ---------
+        TB_OBJS                             75548       1103 25-MAR-1712345678910111213141516171819
+
+
+
+四、参考链接
+
+    How to use an own Maintenance Window for the Statistics Collection in 11g [ID 1300313.1]
+    MOS相关文档： FAQ: Automatic Statistics Collection [ID 1233203.1]
+    [dbms_stats 导入导出 schema 级别统计信息](http://blog.csdn.net/leshami/article/details/8938201)     
+————————————————
+版权声明：本文为CSDN博主「Leshami」的原创文章，遵循 CC 4.0 BY-SA 版权协议，转载请附上原文出处链接及本声明。
+原文链接：https://blog.csdn.net/leshami/article/details/65935325
